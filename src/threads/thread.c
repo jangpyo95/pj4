@@ -183,7 +183,11 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
-  
+  //added4 3-2
+  //inherit parent's current directory
+  if(thread_current()->cur_dir != NULL)
+    t->cur_dir = dir_reopen(thread_current()->cur_dir); 
+ 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
@@ -211,7 +215,7 @@ thread_create (const char *name, int priority,
   t->load = false;
   t->exit = false;
   sema_init(&t->load_sema,0);
-  sema_init(&t->wait_sema,0);
+  //sema_init(&t->wait_sema,0);
   sema_init(&t->exit_sema,0);
   list_push_back(&cur->child,&t->child_elem);
 
@@ -485,6 +489,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  //added4 3-2
+  //set current directory by NULL
+  t->cur_dir = NULL;
   list_push_back (&all_list, &t->allelem);
 
   list_init(&t->child);

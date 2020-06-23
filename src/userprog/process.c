@@ -18,6 +18,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/syscall.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -145,7 +146,7 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
   
-  for(cur->fd; cur->fd>2; cur->fd--)
+  for(cur->fd; cur->fd>2; cur->fd-=1)
     file_close(cur->fdt[cur->fd-1]);
   palloc_free_multiple(cur->fdt,2);
 
@@ -153,7 +154,9 @@ process_exit (void)
      to the kernel-only page directory. */
   
   file_close(cur->run_file);
-
+  //added4 3-2
+  //free directory
+  dir_close(cur->cur_dir);
   pd = cur->pagedir;
   if (pd != NULL) 
     {

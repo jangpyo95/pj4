@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "threads/synch.h"
 
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -101,7 +102,6 @@ struct thread
     bool load;
     bool exit;
     struct semaphore load_sema;
-    struct semaphore wait_sema;
     struct semaphore exit_sema;
     int exit_status;
     
@@ -109,6 +109,10 @@ struct thread
     struct file **fdt;
     
     struct file *run_file;
+
+    //added4 3-1
+    //add current directory
+    struct dir *cur_dir;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

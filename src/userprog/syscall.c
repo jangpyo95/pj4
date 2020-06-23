@@ -1,5 +1,6 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
@@ -12,6 +13,10 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "devices/input.h"
+#include "filesys/directory.h"
+#include "filesys/inode.h"
+#include "filesys/free-map.h"
+#include <string.h>
 
 #define MAX_ARG 3
 
@@ -31,7 +36,11 @@ int write(int fd, void *buffer, unsigned size);
 void seek(int fd, unsigned position);
 unsigned tell(int fd);
 void close(int fd);
-
+bool chdir(const char *dir);
+bool mkdir(const char *dir);
+bool readdir(int fd, char *name);
+bool isdir(int fd);
+int inumber(int fd);
 
 //struct lock filesys_lock;
 
@@ -49,7 +58,7 @@ syscall_handler (struct intr_frame *f UNUSED)
    uint32_t *esp = f->esp;
    uint32_t *eax = &f->eax; 
    check_address(esp);   
-  // printf(" syscall num:%d\n ",*esp);
+//  printf(" syscall num:%d\n ",*esp);
 
   switch(*esp){
 
@@ -79,6 +88,7 @@ syscall_handler (struct intr_frame *f UNUSED)
    get_argument(esp,arg,2);
    check_address(arg[0]);
    *eax = create((const char*) arg[0], arg[1]);
+ //  printf("create: %d", *eax);
    break;
 
   case SYS_REMOVE:
@@ -104,7 +114,6 @@ syscall_handler (struct intr_frame *f UNUSED)
    check_address(arg[1]+arg[2]-1);
    //printf("i'm read pre:%d\n",arg[0]);
    *eax = read(arg[0],(void*)arg[1],(unsigned)arg[2]);
-
    //printf("read size: %d\n", *eax);
    break;
 
@@ -130,6 +139,33 @@ syscall_handler (struct intr_frame *f UNUSED)
    get_argument(esp,arg,1);
    close(arg[0]);
    break;
+  
+  case SYS_CHDIR:
+   get_argument(esp,arg,1);
+   *eax=chdir((const char*)arg[0]);
+//   printf("chdir: %d",*eax);
+   break;
+
+  case SYS_MKDIR:
+   get_argument(esp,arg,1);
+   *eax=mkdir((const char*)arg[0]);
+//   printf("mkdir: %d \n",*eax);
+   break;
+
+  case SYS_READDIR:
+   get_argument(esp,arg,2);
+   *eax=readdir(arg[0],(char*)arg[1]);
+   break;
+
+  case SYS_ISDIR:
+   get_argument(esp,arg,1);
+   *eax=isdir(arg[0]);
+   break;
+
+  case SYS_INUMBER:
+   get_argument(esp,arg,1);
+   *eax=inumber(arg[0]);
+   break;  
 
   default:
    exit(-1);
@@ -176,7 +212,7 @@ int wait(pid_t pid){
 
 void check_address(void *addr){
 
-  struct thread *cur = thread_current();
+//  struct thread *cur = thread_current();
   if(!is_user_vaddr(addr) || addr<0x804800)
     exit(-1);
     
@@ -260,8 +296,13 @@ int write(int fd, void *buffer, unsigned size){
    }
    
    struct file *f = process_get_file(fd);
+   if(!f){
+     lock_release(&filesys_lock);
+     return 0;
+   }
    size = file_write(f,buffer,size);
    lock_release(&filesys_lock);
+   //printf("write size: %d \n",size);
    return size;
 } 
    
@@ -280,4 +321,116 @@ unsigned tell(int fd){
 void close(int fd){
 
    process_close_file(fd);
+}
+
+bool
+chdir(const char *dir){
+  char path[PATH_MAX], file_name[PATH_MAX];
+  strlcpy(path, dir, PATH_MAX);
+  //parent of last directory
+  struct dir *cur_dir = parsing_path(path,file_name);
+  
+  //check if directory exists
+  if(!cur_dir)
+    return false;
+
+  //chdir to last directory named file_name
+  struct inode *inode = NULL;
+  if(!dir_lookup(cur_dir,file_name,&inode) || !is_directory(inode)){
+     dir_close(cur_dir);
+     return false;
+  }
+  dir_close(cur_dir);
+  cur_dir = dir_open(inode);
+  if(!cur_dir)
+     return false;
+
+  //change the directory info of thread structure
+  dir_close(thread_current()->cur_dir);
+  thread_current()->cur_dir = cur_dir;
+
+  return true;  
+}
+
+bool 
+mkdir(const char *dir){
+
+  block_sector_t inode_sec = 0;
+  char name[PATH_MAX];
+
+  struct dir *dir_pre = parsing_path(dir,name);
+  //allocate free map
+  //create directory with 16 entries
+  //add new direcotry
+  bool success =(dir_pre !=NULL
+                 && free_map_allocate(1,&inode_sec)
+                 && dir_create(inode_sec,16)
+                 && dir_add(dir_pre,name, inode_sec));
+
+ //if fail to create directory, release free map
+ if(!success && inode_sec!=0)
+   free_map_release(inode_sec,1);
+
+ //if succeed to create directory, add . and .. 
+ if(success){
+  struct dir *mk_dir = dir_open(inode_open(inode_sec));
+  dir_add(mk_dir, ".",inode_sec);
+  dir_add(mk_dir, "..", inode_get_inumber(dir_get_inode(dir_pre)));
+  dir_close(mk_dir);
+  }
+  
+  dir_close(dir_pre);
+
+  return success;
+}
+
+bool
+readdir(int fd, char *name){
+
+ struct file *f = process_get_file(fd);
+ if(f ==NULL)
+   exit(-1);
+ 
+ struct inode *inode = file_get_inode(f);
+ 
+ if(!inode || !is_directory(inode))
+   return false;
+ 
+ struct dir *dir = dir_open(inode);
+ if(!dir)
+   return false;
+  
+  
+
+  return dir_readdir(dir,name);
+}
+
+//return ture if fd represents a directory
+bool
+isdir(int fd){
+  
+  struct file *f = process_get_file(fd);
+  if(f==NULL)
+    exit(-1);
+
+  struct inode *inode = file_get_inode(f);
+  if(inode ==NULL)
+    exit(-1);
+  
+  return is_directory(inode);
+
+}
+
+//return inode number
+int
+inumber(int fd){
+  
+  struct file *f = process_get_file(fd);
+  if(f==NULL)
+    exit(-1);
+  struct inode *inode =file_get_inode(f);
+  if(inode ==NULL)
+    exit(-1);
+    
+  return inode_get_inumber(inode);  
 }
